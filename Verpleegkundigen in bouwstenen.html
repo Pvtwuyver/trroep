@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Verpleegkundigen in bouwstenen</title>
+<style>
+  :root {
+    --bg: #c0dbf3;
+    --fg: #1f2d3d;
+    --btn-bg: rgba(255, 255, 255, 0.72);
+    --btn-bg-active: #1f2d3d;
+    --btn-fg-active: #ffffff;
+    --btn-border: rgba(31, 45, 61, 0.28);
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16222f;
+      --fg: #e6eef7;
+      --btn-bg: rgba(255, 255, 255, 0.08);
+      --btn-bg-active: #e6eef7;
+      --btn-fg-active: #16222f;
+      --btn-border: rgba(230, 238, 247, 0.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16222f;
+    --fg: #e6eef7;
+    --btn-bg: rgba(255, 255, 255, 0.08);
+    --btn-bg-active: #e6eef7;
+    --btn-fg-active: #16222f;
+    --btn-border: rgba(230, 238, 247, 0.3);
+  }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); height: 100%; }
+  body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  }
+  #stage { position: relative; width: 100%; height: 100%; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  .title {
+    position: absolute; left: 20px; top: 16px; margin: 0;
+    font-size: 15px; font-weight: 600; letter-spacing: 0.01em;
+    pointer-events: none;
+  }
+  .controls {
+    position: absolute; left: 0; right: 0; bottom: 18px;
+    display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+    padding: 0 16px;
+  }
+  button {
+    font: inherit; font-size: 14px; color: var(--fg);
+    background: var(--btn-bg);
+    border: 1px solid var(--btn-border);
+    border-radius: 6px;
+    padding: 9px 16px;
+    cursor: pointer;
+  }
+  button[aria-pressed="true"] { background: var(--btn-bg-active); color: var(--btn-fg-active); }
+  button:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  .hint {
+    position: absolute; right: 20px; top: 16px; margin: 0;
+    font-size: 13px; opacity: 0.75; pointer-events: none; text-align: right;
+  }
+  @media (max-width: 560px) { .hint { display: none; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c" aria-label="Drie figuren van bouwstenen in verpleegkundigenkleding, draaibaar in 3D" role="img"></canvas>
+  <h1 class="title">Verpleegkundigen in bouwstenen</h1>
+  <p class="hint">Slepen om te draaien, scrollen om te zoomen</p>
+  <div class="controls">
+    <button id="auto" type="button" aria-pressed="false">Automatisch draaien</button>
+    <button id="reset" type="button">Beeld herstellen</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  var canvas = document.getElementById('c');
+  var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  var scene = new THREE.Scene();
+  var camera = new THREE.PerspectiveCamera(32, 1, 0.5, 300);
+
+  /* Verlichting */
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x9bb4cc, 0.85));
+  var sun = new THREE.DirectionalLight(0xffffff, 0.75);
+  sun.position.set(10, 24, 16);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -24; sun.shadow.camera.right = 24;
+  sun.shadow.camera.top = 24; sun.shadow.camera.bottom = -24;
+  sun.shadow.camera.near = 1; sun.shadow.camera.far = 80;
+  sun.shadow.bias = -0.0005;
+  scene.add(sun);
+
+  var ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(120, 120),
+    new THREE.ShadowMaterial({ opacity: 0.2 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  /* Bouwstenen */
+  var matCache = {};
+  function mat(color) {
+    if (!matCache[color]) {
+      matCache[color] = new THREE.MeshStandardMaterial({ color: color, roughness: 0.38, metalness: 0 });
+    }
+    return matCache[color];
+  }
+  function brick(g, w, h, d, color, x, y, z) {
+    var m = new THREE.Mesh(new THREE.BoxGeometry(w - 0.03, h - 0.04, d - 0.03), mat(color));
+    m.position.set(x, y + h / 2, z);
+    m.castShadow = true; m.receiveShadow = true;
+    g.add(m);
+    return m;
+  }
+  var studGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.22, 20);
+  function stud(g, color, x, y, z) {
+    var m = new THREE.Mesh(studGeo, mat(color));
+    m.position.set(x, y + 0.09, z);
+    m.castShadow = true;
+    g.add(m);
+  }
+
+  var SKIN = 0xdeb199, HAIR = 0x6b2a0a, WHITE = 0xe6e6e6, BLACK = 0x161616, RED = 0xe01818;
+
+  /* Eén figuur; kleding bepaald door het palet. Voorzijde wijst naar +z. */
+  function buildFigure(p) {
+    var g = new THREE.Group();
+
+    // Schoenen en benen
+    brick(g, 2, 1.2, 2, BLACK, 0, 0, 0);
+    stud(g, BLACK, -0.5, 1.2, 0.6);
+    stud(g, BLACK, 0.5, 1.2, 0.6);
+    brick(g, 1.5, 0.5, 1, SKIN, 0, 1.2, -0.25);
+
+    // Rok: onderrand in kleur, daarboven twee witte lagen
+    brick(g, 3.6, 1.2, 2, p.main, 0, 1.7, 0);
+    brick(g, 3.6, 1.2, 2, WHITE, 0, 2.9, 0);
+    brick(g, 3.6, 1.2, 2, WHITE, 0, 4.1, 0);
+    stud(g, WHITE, -1.4, 5.3, 0.65);
+    stud(g, WHITE, 1.4, 5.3, 0.65);
+
+    // Romp
+    brick(g, 2, 1.2, 1.4, WHITE, 0, 5.3, 0);
+    brick(g, 2, 1.2, 1.4, p.main, 0, 6.5, 0);
+    stud(g, p.main, -0.5, 7.7, 0);
+    stud(g, p.main, 0.5, 7.7, 0);
+
+    // Armen: huid onderaan, mouwen in kleur
+    [-1.4, 1.4].forEach(function (x) {
+      brick(g, 0.8, 1.2, 1, SKIN, x, 5.3, -0.3);
+      brick(g, 0.8, 1.2, 1, p.main, x, 6.5, -0.3);
+      stud(g, p.main, x, 7.7, -0.3);
+    });
+
+    // Nek en hoofd
+    brick(g, 1, 0.7, 1, SKIN, 0, 7.7, 0);
+    brick(g, 2, 1.2, 2, SKIN, 0, 8.4, 0);
+
+    // Haar
+    brick(g, 2, 1.2, 2, HAIR, 0, 9.6, 0);
+    stud(g, HAIR, -0.5, 10.8, -0.65);
+    stud(g, HAIR, 0.5, 10.8, -0.65);
+    brick(g, 2.5, 2.4, 0.8, HAIR, 0, 8.4, -1.4);
+    brick(g, 0.5, 1.2, 1, HAIR, -1.25, 8.4, -0.5);
+    brick(g, 0.5, 1.2, 1, HAIR, 1.25, 8.4, -0.5);
+
+    // Muts met kruis
+    brick(g, 2, 0.9, 1.2, p.hat, 0, 10.8, 0.4);
+    stud(g, p.hat, -0.5, 11.7, 0.4);
+    stud(g, p.hat, 0.5, 11.7, 0.4);
+    var cv = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.56, 0.06), mat(RED));
+    cv.position.set(0, 11.25, 1.01);
+    var ch = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.18, 0.06), mat(RED));
+    ch.position.set(0, 11.25, 1.01);
+    g.add(cv); g.add(ch);
+
+    return g;
+  }
+
+  /* Paletten: midden is het origineel, links en rechts zijn nieuw. */
+  var palettes = [
+    { x: -7.5, main: 0x2fa58b, hat: 0xa5dccf },   // groen (scrubs)
+    { x: 0,    main: 0xdd90c8, hat: 0xdba9e0 },   // origineel roze
+    { x: 7.5,  main: 0xf0a030, hat: 0xf7d49a }    // oranje
+  ];
+  palettes.forEach(function (p) {
+    var f = buildFigure(p);
+    f.position.x = p.x;
+    scene.add(f);
+  });
+
+  /* Camera-besturing: slepen, knijpen en scrollen */
+  var target = new THREE.Vector3(0, 5.8, 0);
+  var AZ0 = 0.5, POL0 = 1.3;
+  var az = AZ0, pol = POL0, zoom = 1, baseDist = 40;
+  var autoRotate = false;
+
+  function updateCamera() {
+    var d = baseDist * zoom;
+    camera.position.set(
+      target.x + d * Math.sin(pol) * Math.sin(az),
+      target.y + d * Math.cos(pol),
+      target.z + d * Math.sin(pol) * Math.cos(az)
+    );
+    camera.lookAt(target);
+  }
+
+  function resize() {
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    var t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    var needV = (13 / 2) / t;
+    var needH = (20.5 / 2) / (t * camera.aspect);
+    baseDist = Math.max(needV, needH) * 1.08;
+    updateCamera();
+  }
+  window.addEventListener('resize', resize);
+
+  var pointers = new Map();
+  var lastPinch = 0;
+  canvas.addEventListener('pointerdown', function (e) {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) {
+      var a = Array.from(pointers.values());
+      lastPinch = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+    }
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    var p = pointers.get(e.pointerId);
+    if (!p) return;
+    var dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (pointers.size === 1) {
+      az -= dx * 0.008;
+      pol = Math.min(1.65, Math.max(0.3, pol - dy * 0.006));
+    } else if (pointers.size === 2) {
+      var a = Array.from(pointers.values());
+      var dist = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+      if (lastPinch > 0) zoom = Math.min(1.6, Math.max(0.3, zoom * (lastPinch / dist)));
+      lastPinch = dist;
+    }
+    updateCamera();
+  });
+  function endPointer(e) { pointers.delete(e.pointerId); lastPinch = 0; }
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    zoom = Math.min(1.6, Math.max(0.3, zoom * Math.exp(e.deltaY * 0.001)));
+    updateCamera();
+  }, { passive: false });
+
+  var autoBtn = document.getElementById('auto');
+  autoBtn.addEventListener('click', function () {
+    autoRotate = !autoRotate;
+    autoBtn.setAttribute('aria-pressed', autoRotate ? 'true' : 'false');
+  });
+  document.getElementById('reset').addEventListener('click', function () {
+    az = AZ0; pol = POL0; zoom = 1; updateCamera();
+  });
+
+  resize();
+  (function loop() {
+    if (autoRotate) { az += 0.004; updateCamera(); }
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  })();
+})();
+</script>
+</body>
+</html>
